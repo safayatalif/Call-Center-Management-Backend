@@ -9,8 +9,8 @@ exports.getDashboardStats = async (req, res) => {
         const userRole = req.user.role;
 
         // Get total counts
-        const [agentsCount, projectsCount, callsCount, pendingCallsCount] = await Promise.all([
-            pool.query('SELECT COUNT(*) FROM agents WHERE status = $1', ['active']),
+        const [employeesCount, projectsCount, callsCount, pendingCallsCount] = await Promise.all([
+            pool.query('SELECT COUNT(*) FROM employees WHERE empstatus = $1', ['Active']),
             pool.query('SELECT COUNT(*) FROM projects WHERE status = $1', ['active']),
             pool.query('SELECT COUNT(*) FROM calls'),
             pool.query('SELECT COUNT(*) FROM calls WHERE status = $1', ['pending'])
@@ -18,9 +18,9 @@ exports.getDashboardStats = async (req, res) => {
 
         // Get recent calls
         const recentCalls = await pool.query(`
-      SELECT c.*, a.name as agent_name, p.name as project_name
+      SELECT c.*, e.name as employee_name, p.name as project_name
       FROM calls c
-      LEFT JOIN agents a ON c.agent_id = a.id
+      LEFT JOIN employees e ON c.employee_id = e.empno_pk
       LEFT JOIN projects p ON c.project_id = p.id
       ORDER BY c.created_at DESC
       LIMIT 10
@@ -33,17 +33,27 @@ exports.getDashboardStats = async (req, res) => {
       GROUP BY status
     `);
 
+        // Get employees by role
+        const employeesByRole = await pool.query(`
+      SELECT role, COUNT(*) as count
+      FROM employees
+      WHERE empstatus = 'Active'
+      GROUP BY role
+    `);
+
         res.json({
             success: true,
             data: {
                 stats: {
-                    totalAgents: parseInt(agentsCount.rows[0].count),
+                    totalEmployees: parseInt(employeesCount.rows[0].count),
+                    totalAgents: parseInt(employeesCount.rows[0].count), // For backward compatibility
                     totalProjects: parseInt(projectsCount.rows[0].count),
                     totalCalls: parseInt(callsCount.rows[0].count),
                     pendingCalls: parseInt(pendingCallsCount.rows[0].count)
                 },
                 recentCalls: recentCalls.rows,
-                callStatusDistribution: callStatusStats.rows
+                callStatusDistribution: callStatusStats.rows,
+                employeesByRole: employeesByRole.rows
             }
         });
 
@@ -51,33 +61,36 @@ exports.getDashboardStats = async (req, res) => {
         console.error('Dashboard stats error:', error);
         res.status(500).json({
             success: false,
-            message: 'Server error fetching dashboard data'
+            message: 'Server error fetching dashboard data',
+            error: error.message
         });
     }
 };
 
 /**
- * Get all agents
+ * Get all employees (agents)
  */
 exports.getAgents = async (req, res) => {
     try {
-        const agents = await pool.query(`
-      SELECT a.*, p.name as project_name
-      FROM agents a
-      LEFT JOIN projects p ON a.assigned_project_id = p.id
-      ORDER BY a.created_at DESC
+        const employees = await pool.query(`
+      SELECT e.*, p.name as project_name
+      FROM employees e
+      LEFT JOIN projects p ON e.assigned_project_id = p.id
+      WHERE e.empstatus = 'Active'
+      ORDER BY e.au_entryat DESC
     `);
 
         res.json({
             success: true,
-            data: agents.rows
+            data: employees.rows
         });
 
     } catch (error) {
-        console.error('Get agents error:', error);
+        console.error('Get employees error:', error);
         res.status(500).json({
             success: false,
-            message: 'Server error fetching agents'
+            message: 'Server error fetching employees',
+            error: error.message
         });
     }
 };
@@ -89,10 +102,10 @@ exports.getProjects = async (req, res) => {
     try {
         const projects = await pool.query(`
       SELECT p.*, 
-        COUNT(DISTINCT a.id) as agent_count,
+        COUNT(DISTINCT e.empno_pk) as employee_count,
         COUNT(DISTINCT c.id) as call_count
       FROM projects p
-      LEFT JOIN agents a ON p.id = a.assigned_project_id
+      LEFT JOIN employees e ON p.id = e.assigned_project_id
       LEFT JOIN calls c ON p.id = c.project_id
       GROUP BY p.id
       ORDER BY p.created_at DESC
@@ -107,7 +120,8 @@ exports.getProjects = async (req, res) => {
         console.error('Get projects error:', error);
         res.status(500).json({
             success: false,
-            message: 'Server error fetching projects'
+            message: 'Server error fetching projects',
+            error: error.message
         });
     }
 };
@@ -117,12 +131,12 @@ exports.getProjects = async (req, res) => {
  */
 exports.getCalls = async (req, res) => {
     try {
-        const { status, agent_id, project_id } = req.query;
+        const { status, employee_id, agent_id, project_id } = req.query;
 
         let query = `
-      SELECT c.*, a.name as agent_name, p.name as project_name
+      SELECT c.*, e.name as employee_name, e.name as agent_name, p.name as project_name
       FROM calls c
-      LEFT JOIN agents a ON c.agent_id = a.id
+      LEFT JOIN employees e ON c.employee_id = e.empno_pk
       LEFT JOIN projects p ON c.project_id = p.id
       WHERE 1=1
     `;
@@ -135,9 +149,11 @@ exports.getCalls = async (req, res) => {
             paramCount++;
         }
 
-        if (agent_id) {
-            query += ` AND c.agent_id = $${paramCount}`;
-            params.push(agent_id);
+        // Support both employee_id and agent_id for backward compatibility
+        const empId = employee_id || agent_id;
+        if (empId) {
+            query += ` AND c.employee_id = $${paramCount}`;
+            params.push(empId);
             paramCount++;
         }
 
@@ -160,7 +176,8 @@ exports.getCalls = async (req, res) => {
         console.error('Get calls error:', error);
         res.status(500).json({
             success: false,
-            message: 'Server error fetching calls'
+            message: 'Server error fetching calls',
+            error: error.message
         });
     }
 };
