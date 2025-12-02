@@ -1,0 +1,31 @@
+{
+    "name": "call-center-backend",
+    "version": "1.0.0",
+    "description": "Call Center Management System Backend",
+    "main": "src/server.js",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "nodemon src/server.js",
+        "init-db": "node src/utils/initDb.js",
+        "seed-db": "node src/utils/seedDb.js"
+    },
+    "keywords": [
+        "call-center",
+        "crm",
+        "management"
+    ],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "express": "^4.18.2",
+        "pg": "^8.11.3",
+        "bcryptjs": "^2.4.3",
+        "jsonwebtoken": "^9.0.2",
+        "cors": "^2.8.5",
+        "dotenv": "^16.3.1",
+        "express-validator": "^7.0.1"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.2"
+    }
+}
