@@ -11,17 +11,17 @@ exports.getDashboardStats = async (req, res) => {
         // Get total counts
         const [employeesCount, projectsCount, callsCount, pendingCallsCount] = await Promise.all([
             pool.query('SELECT COUNT(*) FROM employees WHERE empstatus = $1', ['Active']),
-            pool.query('SELECT COUNT(*) FROM projects WHERE status = $1', ['active']),
+            pool.query('SELECT COUNT(*) FROM projects WHERE projectstatus = $1', ['OPEN']),
             pool.query('SELECT COUNT(*) FROM calls'),
             pool.query('SELECT COUNT(*) FROM calls WHERE status = $1', ['pending'])
         ]);
 
         // Get recent calls
         const recentCalls = await pool.query(`
-      SELECT c.*, e.name as employee_name, p.name as project_name
+      SELECT c.*, e.name as employee_name, p.projectname as project_name
       FROM calls c
       LEFT JOIN employees e ON c.employee_id = e.empno_pk
-      LEFT JOIN projects p ON c.project_id = p.id
+      LEFT JOIN projects p ON c.project_id = p.projectno_pk
       ORDER BY c.created_at DESC
       LIMIT 10
     `);
@@ -73,9 +73,9 @@ exports.getDashboardStats = async (req, res) => {
 exports.getAgents = async (req, res) => {
     try {
         const employees = await pool.query(`
-      SELECT e.*, p.name as project_name
+      SELECT e.*, p.projectname as project_name
       FROM employees e
-      LEFT JOIN projects p ON e.assigned_project_id = p.id
+      LEFT JOIN projects p ON e.assigned_project_id = p.projectno_pk
       WHERE e.empstatus = 'Active'
       ORDER BY e.au_entryat DESC
     `);
@@ -105,10 +105,10 @@ exports.getProjects = async (req, res) => {
         COUNT(DISTINCT e.empno_pk) as employee_count,
         COUNT(DISTINCT c.id) as call_count
       FROM projects p
-      LEFT JOIN employees e ON p.id = e.assigned_project_id
-      LEFT JOIN calls c ON p.id = c.project_id
-      GROUP BY p.id
-      ORDER BY p.created_at DESC
+      LEFT JOIN employees e ON p.projectno_pk = e.assigned_project_id
+      LEFT JOIN calls c ON p.projectno_pk = c.project_id
+      GROUP BY p.projectno_pk
+      ORDER BY p.au_entryat DESC
     `);
 
         res.json({
@@ -134,10 +134,10 @@ exports.getCalls = async (req, res) => {
         const { status, employee_id, agent_id, project_id } = req.query;
 
         let query = `
-      SELECT c.*, e.name as employee_name, e.name as agent_name, p.name as project_name
+      SELECT c.*, e.name as employee_name, e.name as agent_name, p.projectname as project_name
       FROM calls c
       LEFT JOIN employees e ON c.employee_id = e.empno_pk
-      LEFT JOIN projects p ON c.project_id = p.id
+      LEFT JOIN projects p ON c.project_id = p.projectno_pk
       WHERE 1=1
     `;
         const params = [];
