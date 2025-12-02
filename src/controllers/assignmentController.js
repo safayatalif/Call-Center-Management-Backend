@@ -308,6 +308,283 @@ exports.updateAssignment = async (req, res) => {
 };
 
 /**
+ * Get my assigned customers (for agents)
+ */
+exports.getMyCustomers = async (req, res) => {
+    try {
+        const {
+            page = 1,
+            limit = 10,
+            search = '',
+            callstatus = '',
+            callpriority = '',
+            projectId = '',
+            startDate = '',
+            endDate = ''
+        } = req.query;
+
+        const empno_pk = req.user.id;
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+
+        let whereConditions = [`ca.empno_pk = $1`];
+        let queryParams = [empno_pk];
+        let paramCount = 2;
+
+        // Search filter
+        if (search) {
+            whereConditions.push(`(c.custname ILIKE $${paramCount} OR c.custmobilenumber ILIKE $${paramCount})`);
+            queryParams.push(`%${search}%`);
+            paramCount++;
+        }
+
+        // Status filter
+        if (callstatus) {
+            whereConditions.push(`ca.callstatus = $${paramCount}`);
+            queryParams.push(callstatus);
+            paramCount++;
+        }
+
+        // Priority filter
+        if (callpriority) {
+            whereConditions.push(`ca.callpriority = $${paramCount}`);
+            queryParams.push(callpriority);
+            paramCount++;
+        }
+
+        // Project filter
+        if (projectId) {
+            whereConditions.push(`c.projectno_fk = $${paramCount}`);
+            queryParams.push(projectId);
+            paramCount++;
+        }
+
+        // Date range filter (target date)
+        if (startDate) {
+            whereConditions.push(`ca.calltargetdate >= $${paramCount}`);
+            queryParams.push(startDate);
+            paramCount++;
+        }
+
+        if (endDate) {
+            whereConditions.push(`ca.calltargetdate <= $${paramCount}`);
+            queryParams.push(endDate);
+            paramCount++;
+        }
+
+        const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+
+        // Get total count
+        const countQuery = `
+            SELECT COUNT(*) 
+            FROM custassignment ca
+            INNER JOIN customer c ON ca.custno_fk = c.custno_pk
+            ${whereClause}
+        `;
+        const countResult = await pool.query(countQuery, queryParams);
+        const totalCustomers = parseInt(countResult.rows[0].count);
+
+        // Get paginated results
+        const dataQuery = `
+            SELECT ca.*,
+                   c.custname, c.custcode, c.custemail, c.custtype,
+                   c.facebook_link, c.linkedin_link, c.other_link,
+                   c.custarea, c.custfeedback, c.never_callind,
+                   p.projectname, p.projectcode
+            FROM custassignment ca
+            INNER JOIN customer c ON ca.custno_fk = c.custno_pk
+            LEFT JOIN projects p ON c.projectno_fk = p.projectno_pk
+            ${whereClause}
+            ORDER BY 
+                CASE ca.callpriority
+                    WHEN 'High' THEN 1
+                    WHEN 'Medium' THEN 2
+                    WHEN 'Low' THEN 3
+                END,
+                ca.calltargetdate ASC NULLS LAST,
+                ca.assigndate DESC
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
+        `;
+
+        const result = await pool.query(dataQuery, [
+            ...queryParams,
+            parseInt(limit),
+            offset
+        ]);
+
+        res.json({
+            success: true,
+            data: result.rows,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCustomers / parseInt(limit)),
+                totalCustomers: totalCustomers,
+                limit: parseInt(limit)
+            }
+        });
+    } catch (error) {
+        console.error('Get my customers error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error fetching customers',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Update customer interaction (call, SMS, WhatsApp)
+ */
+exports.updateCustomerInteraction = async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const { id } = req.params;
+        const {
+            interaction_type,
+            calleddatetime,
+            callstatus,
+            callstatus_text,
+            followupdate,
+            count_call,
+            count_message,
+            call_duration
+        } = req.body;
+
+        const userId = req.user.id;
+
+        await client.query('BEGIN');
+
+        // Check if assignment belongs to this employee
+        const checkQuery = await client.query(
+            'SELECT * FROM custassignment WHERE assignno_pk = $1 AND empno_pk = $2',
+            [id, userId]
+        );
+
+        if (checkQuery.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({
+                success: false,
+                message: 'You do not have permission to update this assignment'
+            });
+        }
+
+        const assignment = checkQuery.rows[0];
+
+        // Update custassignment
+        const updateResult = await client.query(
+            `UPDATE custassignment SET
+                calleddatetime = COALESCE($1, calleddatetime),
+                callstatus = COALESCE($2, callstatus),
+                callstatus_text = COALESCE($3, callstatus_text),
+                followupdate = COALESCE($4, followupdate),
+                count_call = COALESCE($5, count_call),
+                count_message = COALESCE($6, count_message),
+                au_updateempnoby = $7,
+                au_updateat = CURRENT_TIMESTAMP
+            WHERE assignno_pk = $8
+            RETURNING *`,
+            [
+                calleddatetime,
+                callstatus,
+                callstatus_text,
+                followupdate,
+                count_call,
+                count_message,
+                userId,
+                id
+            ]
+        );
+
+        // Insert into call_history
+        await client.query(
+            `INSERT INTO call_history (
+                assignno_fk, custno_fk, empno_fk, interaction_type,
+                interaction_datetime, callstatus, callstatus_text,
+                followupdate, call_duration, au_entryempnoby, au_entryat
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)`,
+            [
+                id,
+                assignment.custno_fk,
+                userId,
+                interaction_type || 'call',
+                calleddatetime || new Date(),
+                callstatus,
+                callstatus_text,
+                followupdate,
+                call_duration || null,
+                userId
+            ]
+        );
+
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Customer interaction updated successfully',
+            data: updateResult.rows[0]
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Update customer interaction error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error updating customer interaction',
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+};
+
+/**
+ * Get call history for a customer assignment
+ */
+exports.getCallHistory = async (req, res) => {
+    try {
+        const { assignmentId } = req.params;
+        const userId = req.user.id;
+
+        // Check if assignment belongs to this employee (for agents) or allow all for admin/manager
+        const checkQuery = await pool.query(
+            'SELECT * FROM custassignment WHERE assignno_pk = $1',
+            [assignmentId]
+        );
+
+        if (checkQuery.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Assignment not found'
+            });
+        }
+
+        // Get call history
+        const historyQuery = `
+            SELECT ch.*,
+                   e.name as employee_name,
+                   e.empcode as employee_code
+            FROM call_history ch
+            LEFT JOIN employees e ON ch.empno_fk = e.empno_pk
+            WHERE ch.assignno_fk = $1
+            ORDER BY ch.interaction_datetime DESC
+        `;
+
+        const result = await pool.query(historyQuery, [assignmentId]);
+
+        res.json({
+            success: true,
+            data: result.rows
+        });
+    } catch (error) {
+        console.error('Get call history error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error fetching call history',
+            error: error.message
+        });
+    }
+};
+
+/**
  * Delete assignment
  */
 exports.deleteAssignment = async (req, res) => {

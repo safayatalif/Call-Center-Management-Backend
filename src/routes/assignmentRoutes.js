@@ -39,6 +39,27 @@ router.get('/', authMiddleware, assignmentController.getAllAssignments);
 router.put('/:id', authMiddleware, assignmentController.updateAssignment);
 
 /**
+ * @route   GET /api/assignments/my-customers
+ * @desc    Get my assigned customers (for agents)
+ * @access  Private
+ */
+router.get('/my-customers', authMiddleware, assignmentController.getMyCustomers);
+
+/**
+ * @route   PUT /api/assignments/:id/interaction
+ * @desc    Update customer interaction
+ * @access  Private
+ */
+router.put('/:id/interaction', authMiddleware, assignmentController.updateCustomerInteraction);
+
+/**
+ * @route   GET /api/assignments/:assignmentId/history
+ * @desc    Get call history for assignment
+ * @access  Private
+ */
+router.get('/:assignmentId/history', authMiddleware, assignmentController.getCallHistory);
+
+/**
  * @route   DELETE /api/assignments/:id
  * @desc    Delete assignment
  * @access  Private

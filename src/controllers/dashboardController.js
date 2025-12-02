@@ -12,46 +12,59 @@ exports.getDashboardStats = async (req, res) => {
         const [employeesCount, projectsCount, callsCount, pendingCallsCount] = await Promise.all([
             pool.query('SELECT COUNT(*) FROM employees WHERE empstatus = $1', ['Active']),
             pool.query('SELECT COUNT(*) FROM projects WHERE projectstatus = $1', ['OPEN']),
-            pool.query('SELECT COUNT(*) FROM calls'),
-            pool.query('SELECT COUNT(*) FROM calls WHERE status = $1', ['pending'])
+            pool.query('SELECT COUNT(*) FROM call_history'),
+            pool.query('SELECT COUNT(*) FROM custassignment WHERE callstatus = $1', ['Pending'])
         ]);
 
-        // Get recent calls
+        // Get recent calls from call_history
         const recentCalls = await pool.query(`
-      SELECT c.*, e.name as employee_name, p.projectname as project_name
-      FROM calls c
-      LEFT JOIN employees e ON c.employee_id = e.empno_pk
-      LEFT JOIN projects p ON c.project_id = p.projectno_pk
-      ORDER BY c.created_at DESC
-      LIMIT 10
-    `);
+            SELECT ch.*, 
+                   c.custname as customer_name, 
+                   c.custmobilenumber as customer_phone,
+                   e.name as agent_name, 
+                   p.projectname as project_name
+            FROM call_history ch
+            LEFT JOIN customer c ON ch.custno_fk = c.custno_pk
+            LEFT JOIN employees e ON ch.empno_fk = e.empno_pk
+            LEFT JOIN projects p ON c.projectno_fk = p.projectno_pk
+            ORDER BY ch.interaction_datetime DESC
+            LIMIT 10
+        `);
 
-        // Get call status distribution
+        // Get call status distribution from custassignment (current status)
         const callStatusStats = await pool.query(`
-      SELECT status, COUNT(*) as count
-      FROM calls
-      GROUP BY status
-    `);
+            SELECT callstatus as status, COUNT(*) as count
+            FROM custassignment
+            GROUP BY callstatus
+        `);
 
         // Get employees by role
         const employeesByRole = await pool.query(`
-      SELECT role, COUNT(*) as count
-      FROM employees
-      WHERE empstatus = 'Active'
-      GROUP BY role
-    `);
+            SELECT role, COUNT(*) as count
+            FROM employees
+            WHERE empstatus = 'Active'
+            GROUP BY role
+        `);
 
         res.json({
             success: true,
             data: {
                 stats: {
                     totalEmployees: parseInt(employeesCount.rows[0].count),
-                    totalAgents: parseInt(employeesCount.rows[0].count), // For backward compatibility
+                    totalAgents: parseInt(employeesCount.rows[0].count),
                     totalProjects: parseInt(projectsCount.rows[0].count),
                     totalCalls: parseInt(callsCount.rows[0].count),
                     pendingCalls: parseInt(pendingCallsCount.rows[0].count)
                 },
-                recentCalls: recentCalls.rows,
+                recentCalls: recentCalls.rows.map(row => ({
+                    id: row.history_pk,
+                    customer_name: row.customer_name,
+                    customer_phone: row.customer_phone,
+                    status: row.callstatus,
+                    agent_name: row.agent_name,
+                    project_name: row.project_name,
+                    created_at: row.interaction_datetime
+                })),
                 callStatusDistribution: callStatusStats.rows,
                 employeesByRole: employeesByRole.rows
             }

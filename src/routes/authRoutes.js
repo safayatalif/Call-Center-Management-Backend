@@ -43,4 +43,11 @@ router.post(
  */
 router.get('/profile', authMiddleware, authController.getProfile);
 
+/**
+ * @route   PUT /api/auth/update-password
+ * @desc    Update password
+ * @access  Private
+ */
+router.put('/update-password', authMiddleware, authController.updatePassword);
+
 module.exports = router;
