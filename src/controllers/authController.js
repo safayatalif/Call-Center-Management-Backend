@@ -18,25 +18,25 @@ exports.login = async (req, res) => {
             });
         }
 
-        const { email, password } = req.body;
+        const { email, password } = req.body; // email can be email or username
 
-        // Check if user exists
-        const userQuery = await pool.query(
-            'SELECT * FROM users WHERE email = $1',
+        // Check if employee exists (by email or username)
+        const empQuery = await pool.query(
+            'SELECT * FROM employees WHERE emailidoffical = $1 OR username = $1',
             [email]
         );
 
-        if (userQuery.rows.length === 0) {
+        if (empQuery.rows.length === 0) {
             return res.status(401).json({
                 success: false,
                 message: 'Invalid credentials'
             });
         }
 
-        const user = userQuery.rows[0];
+        const employee = empQuery.rows[0];
 
         // Verify password
-        const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+        const isPasswordValid = await bcrypt.compare(password, employee.entrypass);
 
         if (!isPasswordValid) {
             return res.status(401).json({
@@ -48,22 +48,23 @@ exports.login = async (req, res) => {
         // Generate JWT token
         const token = jwt.sign(
             {
-                id: user.id,
-                email: user.email,
-                role: user.role
+                id: employee.empno_pk,
+                email: employee.emailidoffical,
+                role: employee.role,
+                username: employee.username
             },
             process.env.JWT_SECRET,
             { expiresIn: process.env.JWT_EXPIRE || '7d' }
         );
 
-        // Return user data (without password)
-        const { password_hash, ...userData } = user;
+        // Return employee data (without password)
+        const { entrypass, ...empData } = employee;
 
         res.json({
             success: true,
             message: 'Login successful',
             token,
-            user: userData
+            user: empData // Keep 'user' key for frontend compatibility
         });
 
     } catch (error) {
@@ -77,7 +78,7 @@ exports.login = async (req, res) => {
 
 /**
  * User registration controller
- * Creates a new user account
+ * Creates a new employee account (simplified for now)
  */
 exports.register = async (req, res) => {
     try {
@@ -90,18 +91,18 @@ exports.register = async (req, res) => {
             });
         }
 
-        const { name, email, password, role } = req.body;
+        const { name, email, password, role, username } = req.body;
 
-        // Check if user already exists
-        const existingUser = await pool.query(
-            'SELECT * FROM users WHERE email = $1',
-            [email]
+        // Check if employee already exists
+        const existingEmp = await pool.query(
+            'SELECT * FROM employees WHERE emailidoffical = $1 OR username = $2',
+            [email, username || email]
         );
 
-        if (existingUser.rows.length > 0) {
+        if (existingEmp.rows.length > 0) {
             return res.status(400).json({
                 success: false,
-                message: 'User already exists with this email'
+                message: 'Employee already exists with this email or username'
             });
         }
 
@@ -109,32 +110,44 @@ exports.register = async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const passwordHash = await bcrypt.hash(password, salt);
 
-        // Create user
-        const newUser = await pool.query(
-            `INSERT INTO users (name, email, password_hash, role) 
-       VALUES ($1, $2, $3, $4) 
-       RETURNING id, name, email, role, created_at`,
-            [name, email, passwordHash, role || 'agent']
+        // Create employee
+        const newEmp = await pool.query(
+            `INSERT INTO employees (
+                name, emailidoffical, entrypass, role, username, 
+                joindate, empstatus, restricteddataprivilege
+            ) 
+            VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, 'Active', 'N') 
+            RETURNING *`,
+            [
+                name,
+                email,
+                passwordHash,
+                role || 'AGENT',
+                username || email // Fallback username to email if not provided
+            ]
         );
 
-        const user = newUser.rows[0];
+        const employee = newEmp.rows[0];
 
         // Generate JWT token
         const token = jwt.sign(
             {
-                id: user.id,
-                email: user.email,
-                role: user.role
+                id: employee.empno_pk,
+                email: employee.emailidoffical,
+                role: employee.role,
+                username: employee.username
             },
             process.env.JWT_SECRET,
             { expiresIn: process.env.JWT_EXPIRE || '7d' }
         );
 
+        const { entrypass, ...empData } = employee;
+
         res.status(201).json({
             success: true,
             message: 'User registered successfully',
             token,
-            user
+            user: empData
         });
 
     } catch (error) {
@@ -153,21 +166,23 @@ exports.getProfile = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const userQuery = await pool.query(
-            'SELECT id, name, email, role, created_at FROM users WHERE id = $1',
+        const empQuery = await pool.query(
+            'SELECT * FROM employees WHERE empno_pk = $1',
             [userId]
         );
 
-        if (userQuery.rows.length === 0) {
+        if (empQuery.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
             });
         }
 
+        const { entrypass, ...empData } = empQuery.rows[0];
+
         res.json({
             success: true,
-            user: userQuery.rows[0]
+            user: empData
         });
 
     } catch (error) {
