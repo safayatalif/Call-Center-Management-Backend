@@ -8,6 +8,8 @@ const employeeRoutes = require('./routes/employeeRoutes');
 const teamRoutes = require('./routes/teamRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const customerRoutes = require('./routes/customerRoutes');
+const assignmentRoutes = require('./routes/assignmentRoutes');
+const reportsRoutes = require('./routes/reportsRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -56,6 +58,8 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/assignments', assignmentRoutes);
+app.use('/api/reports', reportsRoutes);
 
 // 404 handler
 app.use((req, res) => {

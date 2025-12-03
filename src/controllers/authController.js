@@ -193,3 +193,60 @@ exports.getProfile = async (req, res) => {
         });
     }
 };
+
+/**
+ * Update password
+ */
+exports.updatePassword = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { currentPassword, newPassword } = req.body;
+
+        // Get user
+        const empQuery = await pool.query(
+            'SELECT * FROM employees WHERE empno_pk = $1',
+            [userId]
+        );
+
+        if (empQuery.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        const employee = empQuery.rows[0];
+
+        // Verify current password
+        const isPasswordValid = await bcrypt.compare(currentPassword, employee.entrypass);
+
+        if (!isPasswordValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Incorrect current password'
+            });
+        }
+
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        const passwordHash = await bcrypt.hash(newPassword, salt);
+
+        // Update password
+        await pool.query(
+            'UPDATE employees SET entrypass = $1 WHERE empno_pk = $2',
+            [passwordHash, userId]
+        );
+
+        res.json({
+            success: true,
+            message: 'Password updated successfully'
+        });
+
+    } catch (error) {
+        console.error('Update password error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error updating password'
+        });
+    }
+};
