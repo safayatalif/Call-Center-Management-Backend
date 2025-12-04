@@ -22,38 +22,43 @@ exports.getAllTeams = async (req, res) => {
 
         // Search filter
         if (search) {
-            whereConditions.push('(LOWER(t.teamname) LIKE ? OR LOWER(t.teamcode) LIKE ?)');
-            queryParams.push(`%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`);
+            whereConditions.push(`(t.teamname ILIKE $${paramCount} OR t.teamcode ILIKE $${paramCount} OR t.teamdescription ILIKE $${paramCount})`);
+            queryParams.push(`%${search}%`);
+            paramCount++;
         }
 
-        // Team type filter (column doesn't exist in current schema)
-        // if (teamtype) {
-        //     whereConditions.push('t.teamtype = ?');
-        //     queryParams.push(teamtype);
-        // }
+        // Team type filter
+        if (teamtype) {
+            whereConditions.push(`t.teamtype = $${paramCount}`);
+            queryParams.push(teamtype);
+            paramCount++;
+        }
 
         const whereClause = whereConditions.length > 0
             ? `WHERE ${whereConditions.join(' AND ')}`
             : '';
 
         // Get total count
-        const countQuery = `SELECT COUNT(*) as count FROM empteam t ${whereClause}`;
-        const [countResult] = await pool.execute(countQuery, queryParams);
-        const totalTeams = parseInt(countResult[0].count);
+        const countQuery = `SELECT COUNT(*) FROM empteam t ${whereClause}`;
+        const countResult = await pool.query(countQuery, queryParams);
+        const totalTeams = parseInt(countResult.rows[0].count);
 
-        // Get paginated results with member count
+        // Get paginated results with team leader info and member count
         const dataQuery = `
             SELECT t.*,
+                   e.name as teamlead_name,
+                   e.emailidoffical as teamlead_email,
                    COUNT(DISTINCT td.teamdtlno_pk) as member_count
             FROM empteam t
+            LEFT JOIN employees e ON t.teamlead_empno_fk = e.empno_pk
             LEFT JOIN empteamdtl td ON t.teamno_pk = td.teamno_fk
             ${whereClause}
-            GROUP BY t.teamno_pk
+            GROUP BY t.teamno_pk, e.name, e.emailidoffical
             ORDER BY t.au_entryat DESC
-            LIMIT ? OFFSET ?
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const [result] = await pool.execute(dataQuery, [
+        const result = await pool.query(dataQuery, [
             ...queryParams,
             parseInt(limit),
             offset
@@ -61,7 +66,7 @@ exports.getAllTeams = async (req, res) => {
 
         res.json({
             success: true,
-            data: result,
+            data: result.rows,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalTeams / parseInt(limit)),
@@ -86,13 +91,16 @@ exports.getTeamById = async (req, res) => {
         const { id } = req.params;
 
         // Get team info
-        const [teamResult] = await pool.execute(`
-            SELECT t.*
+        const teamResult = await pool.query(`
+            SELECT t.*,
+                   e.name as teamlead_name,
+                   e.emailidoffical as teamlead_email
             FROM empteam t
-            WHERE t.teamno_pk = ?
+            LEFT JOIN employees e ON t.teamlead_empno_fk = e.empno_pk
+            WHERE t.teamno_pk = $1
         `, [id]);
 
-        if (teamResult.length === 0) {
+        if (teamResult.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Team not found'
@@ -100,20 +108,20 @@ exports.getTeamById = async (req, res) => {
         }
 
         // Get team members
-        const [membersResult] = await pool.execute(`
+        const membersResult = await pool.query(`
             SELECT td.*,
                    e.name as employee_name,
                    e.emailidoffical as employee_email,
                    e.role as employee_role,
                    e.empcode as employee_code
             FROM empteamdtl td
-            JOIN employees e ON td.empno_fk = e.empno_pk
-            WHERE td.teamno_fk = ?
+            JOIN employees e ON td.team_empno_pk = e.empno_pk
+            WHERE td.teamno_fk = $1
             ORDER BY td.au_entryat DESC
         `, [id]);
 
-        const team = teamResult[0];
-        team.members = membersResult;
+        const team = teamResult.rows[0];
+        team.members = membersResult.rows;
 
         res.json({
             success: true,
@@ -144,39 +152,36 @@ exports.createTeam = async (req, res) => {
         const {
             teamcode,
             teamname,
-            teamremarks,
+            teamdescription,
+            teamtype,
+            teamlead_empno_fk,
             au_orgno
         } = req.body;
 
         const userId = req.user.id;
 
         // Create team
-        const [insertResult] = await pool.execute(
+        const result = await pool.query(
             `INSERT INTO empteam (
-                teamcode, teamname, teamremarks,
-                au_orgno, au_entryempnoby, au_entryat
-            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `,
+                teamcode, teamname, teamdescription, teamtype,
+                teamlead_empno_fk, au_orgno, au_entryempnoby, au_entryat
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+            RETURNING *`,
             [
                 teamcode || null,
                 teamname,
-                teamremarks || null,
+                teamdescription || null,
+                teamtype || null,
+                teamlead_empno_fk || null,
                 au_orgno || null,
                 userId
             ]
         );
 
-        // Fetch the newly inserted team by insertId
-        const [newTeamRows] = await pool.execute(
-            'SELECT * FROM empteam WHERE teamno_pk = ?',
-            [insertResult.insertId]
-        );
-        const newTeam = newTeamRows[0] || {};
-
         res.status(201).json({
             success: true,
             message: 'Team created successfully',
-            data: newTeam
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Create team error:', error);
@@ -197,8 +202,8 @@ exports.updateTeam = async (req, res) => {
         const userId = req.user.id;
 
         // Check if team exists
-        const [teamCheck] = await pool.execute('SELECT * FROM empteam WHERE teamno_pk = ?', [id]);
-        if (teamCheck.length === 0) {
+        const teamCheck = await pool.query('SELECT * FROM empteam WHERE teamno_pk = $1', [id]);
+        if (teamCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Team not found'
@@ -208,26 +213,21 @@ exports.updateTeam = async (req, res) => {
         // Build update query dynamically
         let updateFields = [];
         let values = [];
+        let paramCount = 1;
 
         const allowedFields = [
-            'teamcode', 'teamname', 'teamremarks', 'au_orgno'
+            'teamcode', 'teamname', 'teamdescription', 'teamtype',
+            'teamlead_empno_fk', 'au_orgno'
         ];
 
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
-                updateFields.push(`${field} = ?`);
+                updateFields.push(`${field} = $${paramCount++}`);
                 values.push(updates[field]);
             }
         }
 
-        if (updateFields.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No valid fields to update'
-            });
-        }
-
-        updateFields.push(`au_updateempnoby = ?`);
+        updateFields.push(`au_updateempnoby = $${paramCount++}`);
         values.push(userId);
 
         updateFields.push(`au_updateat = CURRENT_TIMESTAMP`);
@@ -235,21 +235,16 @@ exports.updateTeam = async (req, res) => {
 
         const query = `
             UPDATE empteam SET ${updateFields.join(', ')}
-            WHERE teamno_pk = ?
+            WHERE teamno_pk = $${paramCount}
+            RETURNING *
         `;
 
-        await pool.execute(query, values);
-
-        // Fetch updated team
-        const [updatedTeam] = await pool.execute(
-            'SELECT * FROM empteam WHERE teamno_pk = ?',
-            [id]
-        );
+        const result = await pool.query(query, values);
 
         res.json({
             success: true,
             message: 'Team updated successfully',
-            data: updatedTeam[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Update team error:', error);
@@ -267,12 +262,12 @@ exports.deleteTeam = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(
-            'DELETE FROM empteam WHERE teamno_pk = ?',
+        const result = await pool.query(
+            'DELETE FROM empteam WHERE teamno_pk = $1 RETURNING teamno_pk',
             [id]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Team not found'
@@ -302,19 +297,19 @@ exports.addTeamMember = async (req, res) => {
         const userId = req.user.id;
 
         // Check if team exists
-        const [teamCheck] = await pool.execute('SELECT teamcode FROM empteam WHERE teamno_pk = ?', [id]);
-        if (teamCheck.length === 0) {
+        const teamCheck = await pool.query('SELECT teamcode FROM empteam WHERE teamno_pk = $1', [id]);
+        if (teamCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Team not found'
             });
         }
 
-        const teamcode = teamCheck[0].teamcode;
+        const teamcode = teamCheck.rows[0].teamcode;
 
         // Check if employee exists
-        const [empCheck] = await pool.execute('SELECT empno_pk FROM employees WHERE empno_pk = ?', [employee_id]);
-        if (empCheck.length === 0) {
+        const empCheck = await pool.query('SELECT empno_pk FROM employees WHERE empno_pk = $1', [employee_id]);
+        if (empCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Employee not found'
@@ -322,12 +317,12 @@ exports.addTeamMember = async (req, res) => {
         }
 
         // Check if already a member
-        const [memberCheck] = await pool.execute(
-            'SELECT * FROM empteamdtl WHERE teamno_fk = ? AND empno_fk = ?',
+        const memberCheck = await pool.query(
+            'SELECT * FROM empteamdtl WHERE teamno_fk = $1 AND team_empno_pk = $2',
             [id, employee_id]
         );
 
-        if (memberCheck.length > 0) {
+        if (memberCheck.rows.length > 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Employee is already a member of this team'
@@ -335,28 +330,19 @@ exports.addTeamMember = async (req, res) => {
         }
 
         // Add member
-        const [result] = await pool.execute(
+        const result = await pool.query(
             `INSERT INTO empteamdtl (
-                teamno_fk, empno_fk,
+                teamno_fk, teamcode, team_empno_pk, remarks,
                 au_entryempnoby, au_entryat
-            ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            `,
-            [id, employee_id, userId]
-        );
-
-        // Fetch the added member details
-        const [memberDetails] = await pool.execute(
-            `SELECT td.*, e.name as employee_name, e.emailidoffical as employee_email
-             FROM empteamdtl td
-             JOIN employees e ON td.empno_fk = e.empno_pk
-             WHERE td.teamdtlno_pk = ?`,
-            [result.insertId]
+            ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+            RETURNING *`,
+            [id, teamcode, employee_id, remarks || null, userId]
         );
 
         res.status(201).json({
             success: true,
             message: 'Team member added successfully',
-            data: memberDetails[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Add team member error:', error);
@@ -374,12 +360,12 @@ exports.removeTeamMember = async (req, res) => {
     try {
         const { id, memberId } = req.params;
 
-        const [result] = await pool.execute(
-            'DELETE FROM empteamdtl WHERE teamno_fk = ? AND teamdtlno_pk = ?',
+        const result = await pool.query(
+            'DELETE FROM empteamdtl WHERE teamno_fk = $1 AND teamdtlno_pk = $2 RETURNING teamdtlno_pk',
             [id, memberId]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Team member not found'
@@ -412,24 +398,24 @@ exports.getAvailableEmployees = async (req, res) => {
             FROM employees e
             WHERE e.empstatus = 'Active'
             AND e.empno_pk NOT IN (
-                SELECT empno_fk FROM empteamdtl WHERE teamno_fk = ?
+                SELECT team_empno_pk FROM empteamdtl WHERE teamno_fk = $1
             )
         `;
 
         const params = [teamId];
 
         if (search) {
-            query += ` AND (LOWER(e.name) LIKE ? OR LOWER(e.emailidoffical) LIKE ? OR LOWER(e.empcode) LIKE ?)`;
-            params.push(`%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`);
+            query += ` AND (e.name ILIKE $2 OR e.emailidoffical ILIKE $2 OR e.empcode ILIKE $2)`;
+            params.push(`%${search}%`);
         }
 
         query += ` ORDER BY e.name LIMIT 50`;
 
-        const [result] = await pool.execute(query, params);
+        const result = await pool.query(query, params);
 
         res.json({
             success: true,
-            data: result
+            data: result.rows
         });
     } catch (error) {
         console.error('Get available employees error:', error);

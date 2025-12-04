@@ -23,20 +23,23 @@ exports.getAllProjects = async (req, res) => {
 
         // Search filter
         if (search) {
-            whereConditions.push('(LOWER(p.projectname) LIKE ? OR LOWER(p.projectcode) LIKE ?)');
-            queryParams.push(`%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`);
+            whereConditions.push(`(p.projectname ILIKE $${paramCount} OR p.projectcode ILIKE $${paramCount} OR p.projectcompanyname ILIKE $${paramCount})`);
+            queryParams.push(`%${search}%`);
+            paramCount++;
         }
 
         // Status filter
         if (status) {
-            whereConditions.push('p.projectstatus = ?');
+            whereConditions.push(`p.projectstatus = $${paramCount}`);
             queryParams.push(status);
+            paramCount++;
         }
 
         // Team filter
         if (teamId) {
-            whereConditions.push('p.projectdefault_teamno_fk = ?');
+            whereConditions.push(`p.projectdefault_teamno_fk = $${paramCount}`);
             queryParams.push(teamId);
+            paramCount++;
         }
 
         const whereClause = whereConditions.length > 0
@@ -44,11 +47,11 @@ exports.getAllProjects = async (req, res) => {
             : '';
 
         // Get total count
-        const countQuery = `SELECT COUNT(*) as count FROM projects p ${whereClause}`;
-        const [countResult] = await pool.execute(countQuery, queryParams);
-        const totalProjects = parseInt(countResult[0].count);
+        const countQuery = `SELECT COUNT(*) FROM projects p ${whereClause}`;
+        const countResult = await pool.query(countQuery, queryParams);
+        const totalProjects = parseInt(countResult.rows[0].count);
 
-        // Get paginated results
+        // Get paginated results with team info
         const dataQuery = `
             SELECT p.*,
                    t.teamname as team_name,
@@ -60,10 +63,10 @@ exports.getAllProjects = async (req, res) => {
             ${whereClause}
             GROUP BY p.projectno_pk, t.teamname, t.teamcode
             ORDER BY p.au_entryat DESC
-            LIMIT ? OFFSET ?
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const [result] = await pool.execute(dataQuery, [
+        const result = await pool.query(dataQuery, [
             ...queryParams,
             parseInt(limit),
             offset
@@ -71,7 +74,7 @@ exports.getAllProjects = async (req, res) => {
 
         res.json({
             success: true,
-            data: result,
+            data: result.rows,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalProjects / parseInt(limit)),
@@ -96,7 +99,7 @@ exports.getProjectById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(`
+        const result = await pool.query(`
             SELECT p.*,
                    t.teamname as team_name,
                    t.teamcode as team_code,
@@ -104,11 +107,11 @@ exports.getProjectById = async (req, res) => {
             FROM projects p
             LEFT JOIN empteam t ON p.projectdefault_teamno_fk = t.teamno_pk
             LEFT JOIN calls c ON p.projectno_pk = c.project_id
-            WHERE p.projectno_pk = ?
+            WHERE p.projectno_pk = $1
             GROUP BY p.projectno_pk, t.teamname, t.teamcode
         `, [id]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Project not found'
@@ -117,7 +120,7 @@ exports.getProjectById = async (req, res) => {
 
         res.json({
             success: true,
-            data: result[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Get project error:', error);
@@ -145,42 +148,45 @@ exports.createProject = async (req, res) => {
         const {
             projectcode,
             projectname,
-            projectdescription,
+            projectstartdate,
+            projectenddate,
             projectstatus,
             projectdefault_teamno_fk,
+            projectrestrictedind,
+            projectcompanyname,
+            projectcontacts,
             au_orgno
         } = req.body;
 
         const userId = req.user.id;
 
         // Create project
-        const [result] = await pool.execute(
+        const result = await pool.query(
             `INSERT INTO projects (
-                projectcode, projectname, projectdescription,
-                projectstatus, projectdefault_teamno_fk, au_orgno, au_entryempnoby, au_entryat
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `,
+                projectcode, projectname, projectstartdate, projectenddate,
+                projectstatus, projectdefault_teamno_fk, projectrestrictedind,
+                projectcompanyname, projectcontacts, au_orgno, au_entryempnoby, au_entryat
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+            RETURNING *`,
             [
                 projectcode || null,
                 projectname,
-                projectdescription || null,
+                projectstartdate || null,
+                projectenddate || null,
                 projectstatus || 'OPEN',
                 projectdefault_teamno_fk || null,
+                projectrestrictedind || 'N',
+                projectcompanyname || null,
+                projectcontacts || null,
                 au_orgno || null,
                 userId
             ]
         );
 
-        // Fetch the created project
-        const [newProject] = await pool.execute(
-            'SELECT * FROM projects WHERE projectno_pk = ?',
-            [result.insertId]
-        );
-
         res.status(201).json({
             success: true,
             message: 'Project created successfully',
-            data: newProject[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Create project error:', error);
@@ -202,8 +208,8 @@ exports.updateProject = async (req, res) => {
         const userId = req.user.id;
 
         // Check if project exists
-        const [projectCheck] = await pool.execute('SELECT * FROM projects WHERE projectno_pk = ?', [id]);
-        if (projectCheck.length === 0) {
+        const projectCheck = await pool.query('SELECT * FROM projects WHERE projectno_pk = $1', [id]);
+        if (projectCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Project not found'
@@ -213,27 +219,22 @@ exports.updateProject = async (req, res) => {
         // Build update query dynamically
         let updateFields = [];
         let values = [];
+        let paramCount = 1;
 
         const allowedFields = [
-            'projectcode', 'projectname', 'projectdescription',
-            'projectstatus', 'projectdefault_teamno_fk', 'au_orgno'
+            'projectcode', 'projectname', 'projectstartdate', 'projectenddate',
+            'projectstatus', 'projectdefault_teamno_fk', 'projectrestrictedind',
+            'projectcompanyname', 'projectcontacts', 'au_orgno'
         ];
 
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
-                updateFields.push(`${field} = ?`);
+                updateFields.push(`${field} = $${paramCount++}`);
                 values.push(updates[field]);
             }
         }
 
-        if (updateFields.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No valid fields to update'
-            });
-        }
-
-        updateFields.push(`au_updateempnoby = ?`);
+        updateFields.push(`au_updateempnoby = $${paramCount++}`);
         values.push(userId);
 
         updateFields.push(`au_updateat = CURRENT_TIMESTAMP`);
@@ -241,21 +242,16 @@ exports.updateProject = async (req, res) => {
 
         const query = `
             UPDATE projects SET ${updateFields.join(', ')}
-            WHERE projectno_pk = ?
+            WHERE projectno_pk = $${paramCount}
+            RETURNING *
         `;
 
-        const [result] = await pool.execute(query, values);
-
-        // Fetch updated project
-        const [updatedProject] = await pool.execute(
-            'SELECT * FROM projects WHERE projectno_pk = ?',
-            [id]
-        );
+        const result = await pool.query(query, values);
 
         res.json({
             success: true,
             message: 'Project updated successfully',
-            data: updatedProject[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Update project error:', error);
@@ -274,12 +270,12 @@ exports.deleteProject = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(
-            'DELETE FROM projects WHERE projectno_pk = ?',
+        const result = await pool.query(
+            'DELETE FROM projects WHERE projectno_pk = $1 RETURNING projectno_pk',
             [id]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Project not found'
@@ -307,7 +303,7 @@ exports.getProjectStats = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [stats] = await pool.execute(`
+        const stats = await pool.query(`
             SELECT 
                 COUNT(DISTINCT c.id) as total_calls,
                 COUNT(DISTINCT CASE WHEN c.status = 'pending' THEN c.id END) as pending_calls,
@@ -315,13 +311,13 @@ exports.getProjectStats = async (req, res) => {
                 COUNT(DISTINCT c.employee_id) as unique_employees
             FROM projects p
             LEFT JOIN calls c ON p.projectno_pk = c.project_id
-            WHERE p.projectno_pk = ?
+            WHERE p.projectno_pk = $1
             GROUP BY p.projectno_pk
         `, [id]);
 
         res.json({
             success: true,
-            data: stats[0] || {
+            data: stats.rows[0] || {
                 total_calls: 0,
                 pending_calls: 0,
                 completed_calls: 0,

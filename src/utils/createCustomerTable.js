@@ -1,22 +1,22 @@
 const pool = require('../config/database');
 
 /**
- * Create customer table
+ * Create customer table (MySQL version)
  */
 async function createCustomerTable() {
-    const client = await pool.connect();
+    const connection = await pool.getConnection();
 
     try {
         console.log('🔧 Creating customer table...');
 
-        await client.query('BEGIN');
+        await connection.query('START TRANSACTION');
 
         // Create customer table
-        await client.query(`
+        await connection.query(`
             CREATE TABLE IF NOT EXISTS customer (
-                custno_pk SERIAL PRIMARY KEY,
+                custno_pk INT AUTO_INCREMENT PRIMARY KEY,
                 custcode VARCHAR(50),
-                projectno_fk INTEGER REFERENCES projects(projectno_pk) ON DELETE SET NULL,
+                projectno_fk INT,
                 countrycode VARCHAR(10) DEFAULT '+880',
                 custmobilenumber VARCHAR(50),
                 custemail VARCHAR(255),
@@ -36,36 +36,35 @@ async function createCustomerTable() {
                 custbirthdate VARCHAR(50),
                 custtype VARCHAR(50) DEFAULT 'Undefined',
                 cust_labeling VARCHAR(255),
-                au_orgno INTEGER,
-                au_entryempnoby INTEGER,
+                au_orgno INT,
+                au_entryempnoby INT,
                 au_entryat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 au_entrysession VARCHAR(255),
-                au_updateempnoby INTEGER,
-                au_updateat TIMESTAMP,
-                au_udpatesession VARCHAR(255)
+                au_updateempnoby INT,
+                au_updateat TIMESTAMP NULL,
+                au_udpatesession VARCHAR(255),
+                FOREIGN KEY (projectno_fk) REFERENCES projects(projectno_pk) ON DELETE SET NULL
             )
         `);
         console.log('✅ customer table created');
 
-        // Create indexes
-        await client.query(`
-            CREATE INDEX IF NOT EXISTS idx_customer_code ON customer(custcode);
-            CREATE INDEX IF NOT EXISTS idx_customer_project ON customer(projectno_fk);
-            CREATE INDEX IF NOT EXISTS idx_customer_mobile ON customer(custmobilenumber);
-            CREATE INDEX IF NOT EXISTS idx_customer_email ON customer(custemail);
-            CREATE INDEX IF NOT EXISTS idx_customer_type ON customer(custtype);
-        `);
+        // Create indexes (one at a time for MySQL)
+        await connection.query('CREATE INDEX IF NOT EXISTS idx_customer_code ON customer(custcode)');
+        await connection.query('CREATE INDEX IF NOT EXISTS idx_customer_project ON customer(projectno_fk)');
+        await connection.query('CREATE INDEX IF NOT EXISTS idx_customer_mobile ON customer(custmobilenumber)');
+        await connection.query('CREATE INDEX IF NOT EXISTS idx_customer_email ON customer(custemail)');
+        await connection.query('CREATE INDEX IF NOT EXISTS idx_customer_type ON customer(custtype)');
         console.log('✅ Indexes created');
 
-        await client.query('COMMIT');
+        await connection.query('COMMIT');
         console.log('✅ Customer table created successfully!');
 
     } catch (error) {
-        await client.query('ROLLBACK');
+        await connection.query('ROLLBACK');
         console.error('❌ Failed to create customer table:', error);
         throw error;
     } finally {
-        client.release();
+        connection.release();
     }
 }
 

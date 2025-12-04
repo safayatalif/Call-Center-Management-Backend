@@ -41,11 +41,11 @@ exports.getAgentPerformance = async (req, res) => {
             ORDER BY total_interactions DESC
         `;
 
-        const [result] = await pool.execute(query, params);
+        const result = await pool.query(query, params);
 
         res.json({
             success: true,
-            data: result
+            data: result.rows
         });
     } catch (error) {
         console.error('Get agent performance error:', error);
@@ -94,11 +94,11 @@ exports.getProjectPerformance = async (req, res) => {
             ORDER BY total_interactions DESC
         `;
 
-        const [result] = await pool.execute(query, params);
+        const result = await pool.query(query, params);
 
         res.json({
             success: true,
-            data: result
+            data: result.rows
         });
     } catch (error) {
         console.error('Get project performance error:', error);
@@ -145,11 +145,11 @@ exports.getDailyActivity = async (req, res) => {
             LIMIT 30
         `;
 
-        const [result] = await pool.execute(query, params);
+        const result = await pool.query(query, params);
 
         res.json({
             success: true,
-            data: result
+            data: result.rows
         });
     } catch (error) {
         console.error('Get daily activity error:', error);

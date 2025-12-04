@@ -24,20 +24,23 @@ exports.getAllEmployees = async (req, res) => {
 
         // Search filter (name, email, username, empcode)
         if (search) {
-            whereConditions.push('(LOWER(name) LIKE ? OR LOWER(emailidoffical) LIKE ? OR LOWER(username) LIKE ? OR LOWER(empcode) LIKE ?)');
-            queryParams.push(`%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`);
+            whereConditions.push(`(name ILIKE $${paramCount} OR emailidoffical ILIKE $${paramCount} OR username ILIKE $${paramCount} OR empcode ILIKE $${paramCount})`);
+            queryParams.push(`%${search}%`);
+            paramCount++;
         }
 
         // Role filter
         if (role) {
-            whereConditions.push('role = ?');
+            whereConditions.push(`role = $${paramCount}`);
             queryParams.push(role);
+            paramCount++;
         }
 
         // Status filter
         if (status) {
-            whereConditions.push('empstatus = ?');
+            whereConditions.push(`empstatus = $${paramCount}`);
             queryParams.push(status);
+            paramCount++;
         }
 
         const whereClause = whereConditions.length > 0
@@ -45,9 +48,9 @@ exports.getAllEmployees = async (req, res) => {
             : '';
 
         // Get total count
-        const countQuery = `SELECT COUNT(*) as count FROM employees ${whereClause}`;
-        const [countResult] = await pool.execute(countQuery, queryParams);
-        const totalEmployees = parseInt(countResult[0].count);
+        const countQuery = `SELECT COUNT(*) FROM employees ${whereClause}`;
+        const countResult = await pool.query(countQuery, queryParams);
+        const totalEmployees = parseInt(countResult.rows[0].count);
 
         // Get paginated results
         const dataQuery = `
@@ -55,17 +58,17 @@ exports.getAllEmployees = async (req, res) => {
             FROM employees 
             ${whereClause}
             ORDER BY empno_pk DESC
-            LIMIT ? OFFSET ?
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const [result] = await pool.execute(dataQuery, [
+        const result = await pool.query(dataQuery, [
             ...queryParams,
             parseInt(limit),
             offset
         ]);
 
         // Remove passwords from response
-        const employees = result.map(emp => {
+        const employees = result.rows.map(emp => {
             const { entrypass, ...empData } = emp;
             return empData;
         });
@@ -95,20 +98,20 @@ exports.getAllEmployees = async (req, res) => {
 exports.getEmployeeById = async (req, res) => {
     try {
         const { id } = req.params;
-        const [result] = await pool.execute(`
+        const result = await pool.query(`
             SELECT *
             FROM employees 
-            WHERE empno_pk = ?
+            WHERE empno_pk = $1
         `, [id]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Employee not found'
             });
         }
 
-        const { entrypass, ...employee } = result[0];
+        const { entrypass, ...employee } = result.rows[0];
 
         res.json({
             success: true,
@@ -158,12 +161,12 @@ exports.createEmployee = async (req, res) => {
         } = req.body;
 
         // Check if employee already exists (email or username)
-        const [existingEmployee] = await pool.execute(
-            'SELECT * FROM employees WHERE emailidoffical = ? OR username = ?',
+        const existingEmployee = await pool.query(
+            'SELECT * FROM employees WHERE emailidoffical = $1 OR username = $2',
             [emailidoffical, username]
         );
 
-        if (existingEmployee.length > 0) {
+        if (existingEmployee.rows.length > 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Employee already exists with this email or username'
@@ -175,15 +178,15 @@ exports.createEmployee = async (req, res) => {
         const passwordHash = await bcrypt.hash(entrypass, salt);
 
         // Create employee
-        const [insertResult] = await pool.execute(
+        const result = await pool.query(
             `INSERT INTO employees (
                 empcode, joindate, name, role, capacity, 
                 officialmobilenum, personalmobilenum, socialmediaidofficial, 
                 emailidoffical, address, empremarks, empstatus, 
                 restricteddataprivilege, app_userind, username, entrypass, 
                 au_orgno, au_entryat, assigned_project_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?) 
-            `,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP, $18) 
+            RETURNING *`,
             [
                 empcode || null,
                 joindate || new Date(),
@@ -206,12 +209,7 @@ exports.createEmployee = async (req, res) => {
             ]
         );
 
-        // Fetch the newly inserted employee by insertId
-        const [newEmployeeRows] = await pool.execute(
-            'SELECT * FROM employees WHERE empno_pk = ?',
-            [insertResult.insertId]
-        );
-        const { entrypass: _, ...newEmployee } = newEmployeeRows[0] || {};
+        const { entrypass: _, ...newEmployee } = result.rows[0];
 
         res.status(201).json({
             success: true,
@@ -236,8 +234,8 @@ exports.updateEmployee = async (req, res) => {
         const updates = req.body;
 
         // Check if employee exists
-        const [empCheck] = await pool.execute('SELECT * FROM employees WHERE empno_pk = ?', [id]);
-        if (empCheck.length === 0) {
+        const empCheck = await pool.query('SELECT * FROM employees WHERE empno_pk = $1', [id]);
+        if (empCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Employee not found'
@@ -245,13 +243,13 @@ exports.updateEmployee = async (req, res) => {
         }
 
         // If email/username is being changed, check uniqueness
-        if ((updates.emailidoffical && updates.emailidoffical !== empCheck[0].emailidoffical) ||
-            (updates.username && updates.username !== empCheck[0].username)) {
-            const [duplicateCheck] = await pool.execute(
-                'SELECT * FROM employees WHERE (emailidoffical = ? OR username = ?) AND empno_pk != ?',
+        if ((updates.emailidoffical && updates.emailidoffical !== empCheck.rows[0].emailidoffical) ||
+            (updates.username && updates.username !== empCheck.rows[0].username)) {
+            const duplicateCheck = await pool.query(
+                'SELECT * FROM employees WHERE (emailidoffical = $1 OR username = $2) AND empno_pk != $3',
                 [updates.emailidoffical || '', updates.username || '', id]
             );
-            if (duplicateCheck.length > 0) {
+            if (duplicateCheck.rows.length > 0) {
                 return res.status(400).json({
                     success: false,
                     message: 'Email or username already in use by another employee'
@@ -268,6 +266,7 @@ exports.updateEmployee = async (req, res) => {
         // Build update query dynamically
         let updateFields = [];
         let values = [];
+        let paramCount = 1;
 
         const allowedFields = [
             'empcode', 'joindate', 'name', 'role', 'capacity',
@@ -279,16 +278,9 @@ exports.updateEmployee = async (req, res) => {
 
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
-                updateFields.push(`${field} = ?`);
+                updateFields.push(`${field} = $${paramCount++}`);
                 values.push(updates[field]);
             }
-        }
-
-        if (updateFields.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No valid fields to update'
-            });
         }
 
         updateFields.push(`au_updateat = CURRENT_TIMESTAMP`);
@@ -296,18 +288,13 @@ exports.updateEmployee = async (req, res) => {
 
         const query = `
             UPDATE employees SET ${updateFields.join(', ')}
-            WHERE empno_pk = ?
+            WHERE empno_pk = $${paramCount}
+            RETURNING *
         `;
 
-        await pool.execute(query, values);
+        const result = await pool.query(query, values);
 
-        // Fetch updated employee
-        const [updatedRows] = await pool.execute(
-            'SELECT * FROM employees WHERE empno_pk = ?',
-            [id]
-        );
-
-        const { entrypass: _, ...updatedEmployee } = updatedRows[0];
+        const { entrypass: _, ...updatedEmployee } = result.rows[0];
 
         res.json({
             success: true,
@@ -330,12 +317,12 @@ exports.deleteEmployee = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(
-            'DELETE FROM employees WHERE empno_pk = ?',
+        const result = await pool.query(
+            'DELETE FROM employees WHERE empno_pk = $1 RETURNING empno_pk',
             [id]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Employee not found'

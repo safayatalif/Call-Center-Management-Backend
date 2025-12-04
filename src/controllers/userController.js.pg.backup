@@ -24,20 +24,23 @@ exports.getAllUsers = async (req, res) => {
 
         // Search filter (name or email)
         if (search) {
-            whereConditions.push('(LOWER(name) LIKE ? OR LOWER(email) LIKE ?)');
-            queryParams.push(`%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`);
+            whereConditions.push(`(name ILIKE $${paramCount} OR email ILIKE $${paramCount})`);
+            queryParams.push(`%${search}%`);
+            paramCount++;
         }
 
         // Role filter
         if (role) {
-            whereConditions.push('role = ?');
+            whereConditions.push(`role = $${paramCount}`);
             queryParams.push(role);
+            paramCount++;
         }
 
         // Status filter
         if (status) {
-            whereConditions.push('status = ?');
+            whereConditions.push(`status = $${paramCount}`);
             queryParams.push(status);
+            paramCount++;
         }
 
         const whereClause = whereConditions.length > 0
@@ -46,8 +49,8 @@ exports.getAllUsers = async (req, res) => {
 
         // Get total count
         const countQuery = `SELECT COUNT(*) FROM users ${whereClause}`;
-        const [countResult] = await pool.execute(countQuery, queryParams);
-        const totalUsers = parseInt(countResult[0][0].count);
+        const countResult = await pool.query(countQuery, queryParams);
+        const totalUsers = parseInt(countResult.rows[0].count);
 
         // Get paginated results
         const dataQuery = `
@@ -60,7 +63,7 @@ exports.getAllUsers = async (req, res) => {
             LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const [result] = await pool.execute(dataQuery, [
+        const result = await pool.query(dataQuery, [
             ...queryParams,
             parseInt(limit),
             offset
@@ -68,7 +71,7 @@ exports.getAllUsers = async (req, res) => {
 
         res.json({
             success: true,
-            data: result,
+            data: result.rows,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalUsers / parseInt(limit)),
@@ -91,15 +94,15 @@ exports.getAllUsers = async (req, res) => {
 exports.getUserById = async (req, res) => {
     try {
         const { id } = req.params;
-        const [result] = await pool.execute(`
+        const result = await pool.query(`
             SELECT id, name, email, role, capacity, personal_numbers, 
                    official_numbers, social_ids, address, remarks, status, 
                    restricted_data_privilege, created_at, updated_at
             FROM users 
-            WHERE id = ?
+            WHERE id = $1
         `, [id]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
@@ -108,7 +111,7 @@ exports.getUserById = async (req, res) => {
 
         res.json({
             success: true,
-            data: result[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Get user error:', error);
@@ -148,12 +151,12 @@ exports.createUser = async (req, res) => {
         } = req.body;
 
         // Check if user already exists
-        const [existingUser] = await pool.execute(
-            'SELECT * FROM users WHERE email = ?',
+        const existingUser = await pool.query(
+            'SELECT * FROM users WHERE email = $1',
             [email]
         );
 
-        if (existingUser.length > 0) {
+        if (existingUser.rows.length > 0) {
             return res.status(400).json({
                 success: false,
                 message: 'User already exists with this email'
@@ -165,13 +168,15 @@ exports.createUser = async (req, res) => {
         const passwordHash = await bcrypt.hash(password, salt);
 
         // Create user
-        const [result] = await pool.execute(
+        const result = await pool.query(
             `INSERT INTO users (
                 name, email, password_hash, role, capacity, 
                 personal_numbers, official_numbers, social_ids, 
                 address, remarks, status, restricted_data_privilege
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
-            `,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+            RETURNING id, name, email, role, capacity, personal_numbers, 
+                      official_numbers, social_ids, address, remarks, 
+                      status, restricted_data_privilege, created_at`,
             [
                 name,
                 email,
@@ -191,7 +196,7 @@ exports.createUser = async (req, res) => {
         res.status(201).json({
             success: true,
             message: 'User created successfully',
-            data: result[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Create user error:', error);
@@ -224,8 +229,8 @@ exports.updateUser = async (req, res) => {
         } = req.body;
 
         // Check if user exists
-        const [userCheck] = await pool.execute('SELECT * FROM users WHERE id = ?', [id]);
-        if (userCheck.length === 0) {
+        const userCheck = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+        if (userCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
@@ -233,12 +238,12 @@ exports.updateUser = async (req, res) => {
         }
 
         // If email is being changed, check if new email already exists
-        if (email && email !== userCheck[0][0].email) {
-            const [emailCheck] = await pool.execute(
-                'SELECT * FROM users WHERE email = ? AND id != ?',
+        if (email && email !== userCheck.rows[0].email) {
+            const emailCheck = await pool.query(
+                'SELECT * FROM users WHERE email = $1 AND id != $2',
                 [email, id]
             );
-            if (emailCheck.length > 0) {
+            if (emailCheck.rows.length > 0) {
                 return res.status(400).json({
                     success: false,
                     message: 'Email already in use by another user'
@@ -308,14 +313,17 @@ exports.updateUser = async (req, res) => {
         const query = `
             UPDATE users SET ${updateFields.join(', ')}
             WHERE id = $${paramCount}
-            `;
+            RETURNING id, name, email, role, capacity, personal_numbers, 
+                      official_numbers, social_ids, address, remarks, 
+                      status, restricted_data_privilege, created_at, updated_at
+        `;
 
-        const [result] = await pool.execute(query, values);
+        const result = await pool.query(query, values);
 
         res.json({
             success: true,
             message: 'User updated successfully',
-            data: result[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Update user error:', error);
@@ -333,12 +341,12 @@ exports.deleteUser = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(
-            'DELETE FROM users WHERE id = ?',
+        const result = await pool.query(
+            'DELETE FROM users WHERE id = $1 RETURNING id',
             [id]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
@@ -365,14 +373,14 @@ exports.inactivateUser = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(
+        const result = await pool.query(
             `UPDATE users SET status = 'inactive', updated_at = CURRENT_TIMESTAMP 
-             WHERE id = ? 
-             `,
+             WHERE id = $1 
+             RETURNING id, name, email, status`,
             [id]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
@@ -382,7 +390,7 @@ exports.inactivateUser = async (req, res) => {
         res.json({
             success: true,
             message: 'User inactivated successfully',
-            data: result[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Inactivate user error:', error);

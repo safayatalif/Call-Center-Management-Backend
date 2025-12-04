@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
  * Create default admin user
  */
 async function createAdminUser() {
-    const client = await pool.connect();
+    const connection = await pool.getConnection();
 
     try {
         console.log('🔧 Creating admin user...');
@@ -25,12 +25,12 @@ async function createAdminUser() {
         };
 
         // Check if admin already exists
-        const existingAdmin = await client.query(
-            'SELECT * FROM employees WHERE username = $1 OR emailidoffical = $2',
+        const [existingAdmin] = await connection.execute(
+            'SELECT * FROM employees WHERE username = ? OR emailidoffical = ?',
             [adminData.username, adminData.emailidoffical]
         );
 
-        if (existingAdmin.rows.length > 0) {
+        if (existingAdmin.length > 0) {
             console.log('⚠️  Admin user already exists!');
             console.log('\n📧 Email:', adminData.emailidoffical);
             console.log('👤 Username:', adminData.username);
@@ -43,13 +43,12 @@ async function createAdminUser() {
         const passwordHash = await bcrypt.hash(adminData.password, salt);
 
         // Create admin user
-        const result = await client.query(
+        const [result] = await connection.execute(
             `INSERT INTO employees (
                 empcode, joindate, name, role, capacity,
                 officialmobilenum, emailidoffical, empstatus,
                 restricteddataprivilege, username, entrypass, au_entryat
-            ) VALUES ($1, CURRENT_TIMESTAMP, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
-            RETURNING empno_pk, empcode, name, emailidoffical, username, role`,
+            ) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
             [
                 adminData.empcode,
                 adminData.name,
@@ -78,7 +77,7 @@ async function createAdminUser() {
         console.error('❌ Failed to create admin user:', error);
         throw error;
     } finally {
-        client.release();
+        connection.release();
     }
 }
 
