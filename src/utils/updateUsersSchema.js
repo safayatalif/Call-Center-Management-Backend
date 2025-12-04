@@ -1,39 +1,51 @@
 const pool = require('../config/database');
 
 async function updateUsersSchema() {
-    const client = await pool.connect();
+    const connection = await pool.getConnection();
 
     try {
         console.log('🔧 Updating users table schema...');
 
-        await client.query('BEGIN');
+        await connection.query('START TRANSACTION');
 
-        // Add new columns to users table
-        await client.query(`
-            ALTER TABLE users 
-            ADD COLUMN IF NOT EXISTS capacity INTEGER DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS personal_numbers TEXT,
-            ADD COLUMN IF NOT EXISTS official_numbers TEXT,
-            ADD COLUMN IF NOT EXISTS social_ids JSONB,
-            ADD COLUMN IF NOT EXISTS address TEXT,
-            ADD COLUMN IF NOT EXISTS remarks TEXT,
-            ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active',
-            ADD COLUMN IF NOT EXISTS restricted_data_privilege BOOLEAN DEFAULT false;
-        `);
+        // Note: MySQL doesn't support ADD COLUMN IF NOT EXISTS in the same way
+        // We'll need to check if columns exist first or use a different approach
 
-        console.log('✅ Added new columns to users table');
+        // For simplicity, we'll try to add columns and ignore errors if they exist
+        const columnsToAdd = [
+            { name: 'capacity', type: 'INT DEFAULT 0' },
+            { name: 'personal_numbers', type: 'TEXT' },
+            { name: 'official_numbers', type: 'TEXT' },
+            { name: 'social_ids', type: 'JSON' },
+            { name: 'address', type: 'TEXT' },
+            { name: 'remarks', type: 'TEXT' },
+            { name: 'status', type: 'VARCHAR(50) DEFAULT "active"' },
+            { name: 'restricted_data_privilege', type: 'BOOLEAN DEFAULT false' }
+        ];
 
-        // Update role column to support new roles if needed
+        for (const column of columnsToAdd) {
+            try {
+                await connection.query(`ALTER TABLE users ADD COLUMN ${column.name} ${column.type}`);
+                console.log(`✅ Added column: ${column.name}`);
+            } catch (err) {
+                if (err.code === 'ER_DUP_FIELDNAME') {
+                    console.log(`ℹ️  Column ${column.name} already exists, skipping...`);
+                } else {
+                    throw err;
+                }
+            }
+        }
+
         console.log('✅ Users table schema updated');
 
-        await client.query('COMMIT');
+        await connection.query('COMMIT');
         console.log('✅ Schema update completed successfully!');
     } catch (error) {
-        await client.query('ROLLBACK');
+        await connection.query('ROLLBACK');
         console.error('❌ Schema update failed:', error);
         throw error;
     } finally {
-        client.release();
+        connection.release();
     }
 }
 

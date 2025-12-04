@@ -23,20 +23,23 @@ exports.getAllCustomers = async (req, res) => {
 
         // Search filter
         if (search) {
-            whereConditions.push('(LOWER(c.custname) LIKE ? OR LOWER(c.custcode) LIKE ? OR LOWER(c.custmobilenumber) LIKE ? OR LOWER(c.custemail) LIKE ?)');
-            queryParams.push(`%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`, `%${search.toLowerCase()}%`);
+            whereConditions.push(`(c.custname ILIKE $${paramCount} OR c.custcode ILIKE $${paramCount} OR c.custmobilenumber ILIKE $${paramCount} OR c.custemail ILIKE $${paramCount})`);
+            queryParams.push(`%${search}%`);
+            paramCount++;
         }
 
         // Project filter
         if (projectId) {
-            whereConditions.push('c.projectno_fk = ?');
+            whereConditions.push(`c.projectno_fk = $${paramCount}`);
             queryParams.push(projectId);
+            paramCount++;
         }
 
         // Customer type filter
         if (custtype) {
-            whereConditions.push('c.custtype = ?');
+            whereConditions.push(`c.custtype = $${paramCount}`);
             queryParams.push(custtype);
+            paramCount++;
         }
 
         const whereClause = whereConditions.length > 0
@@ -44,9 +47,9 @@ exports.getAllCustomers = async (req, res) => {
             : '';
 
         // Get total count
-        const countQuery = `SELECT COUNT(*) as count FROM customer c ${whereClause}`;
-        const [countResult] = await pool.execute(countQuery, queryParams);
-        const totalCustomers = parseInt(countResult[0].count);
+        const countQuery = `SELECT COUNT(*) FROM customer c ${whereClause}`;
+        const countResult = await pool.query(countQuery, queryParams);
+        const totalCustomers = parseInt(countResult.rows[0].count);
 
         // Get paginated results with project info
         const dataQuery = `
@@ -57,10 +60,10 @@ exports.getAllCustomers = async (req, res) => {
             LEFT JOIN projects p ON c.projectno_fk = p.projectno_pk
             ${whereClause}
             ORDER BY c.au_entryat DESC
-            LIMIT ? OFFSET ?
+            LIMIT $${paramCount} OFFSET $${paramCount + 1}
         `;
 
-        const [result] = await pool.execute(dataQuery, [
+        const result = await pool.query(dataQuery, [
             ...queryParams,
             parseInt(limit),
             offset
@@ -68,7 +71,7 @@ exports.getAllCustomers = async (req, res) => {
 
         res.json({
             success: true,
-            data: result,
+            data: result.rows,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalCustomers / parseInt(limit)),
@@ -93,16 +96,16 @@ exports.getCustomerById = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(`
+        const result = await pool.query(`
             SELECT c.*,
                    p.projectname as project_name,
                    p.projectcode as project_code
             FROM customer c
             LEFT JOIN projects p ON c.projectno_fk = p.projectno_pk
-            WHERE c.custno_pk = ?
+            WHERE c.custno_pk = $1
         `, [id]);
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Customer not found'
@@ -111,7 +114,7 @@ exports.getCustomerById = async (req, res) => {
 
         res.json({
             success: true,
-            data: result[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Get customer error:', error);
@@ -139,47 +142,71 @@ exports.createCustomer = async (req, res) => {
         const {
             custcode,
             projectno_fk,
+            countrycode,
             custmobilenumber,
             custemail,
             custname,
-            custaddress,
-            custremarks,
+            facebook_link,
+            linkedin_link,
+            other_link,
+            call_link_type,
+            text_note,
+            contact_type,
+            custarea,
+            custfeedback,
+            agentfeedback,
+            never_callind,
+            never_callind_message,
+            custgender,
+            custbirthdate,
+            custtype,
+            cust_labeling,
             au_orgno
         } = req.body;
 
         const userId = req.user.id;
 
         // Create customer
-        const [result] = await pool.execute(
+        const result = await pool.query(
             `INSERT INTO customer (
-                custcode, projectno_fk, custmobilenumber, custemailid,
-                custname, custaddress, custremarks,
-                au_orgno, au_entryempnoby, au_entryat
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `,
+                custcode, projectno_fk, countrycode, custmobilenumber, custemail,
+                custname, facebook_link, linkedin_link, other_link, call_link_type,
+                text_note, contact_type, custarea, custfeedback, agentfeedback,
+                never_callind, never_callind_message, custgender, custbirthdate,
+                custtype, cust_labeling, au_orgno, au_entryempnoby, au_entryat
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, CURRENT_TIMESTAMP)
+            RETURNING *`,
             [
                 custcode || null,
                 projectno_fk || null,
+                countrycode || '+880',
                 custmobilenumber || null,
                 custemail || null,
                 custname || null,
-                custaddress || null,
-                custremarks || null,
+                facebook_link || null,
+                linkedin_link || null,
+                other_link || null,
+                call_link_type || null,
+                text_note || null,
+                contact_type || null,
+                custarea || null,
+                custfeedback || null,
+                agentfeedback || null,
+                never_callind || null,
+                never_callind_message || null,
+                custgender || null,
+                custbirthdate || null,
+                custtype || 'Undefined',
+                cust_labeling || null,
                 au_orgno || null,
                 userId
             ]
         );
 
-        // Fetch the created customer
-        const [newCustomer] = await pool.execute(
-            'SELECT * FROM customer WHERE custno_pk = ?',
-            [result.insertId]
-        );
-
         res.status(201).json({
             success: true,
             message: 'Customer created successfully',
-            data: newCustomer[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Create customer error:', error);
@@ -201,8 +228,8 @@ exports.updateCustomer = async (req, res) => {
         const userId = req.user.id;
 
         // Check if customer exists
-        const [customerCheck] = await pool.execute('SELECT * FROM customer WHERE custno_pk = ?', [id]);
-        if (customerCheck.length === 0) {
+        const customerCheck = await pool.query('SELECT * FROM customer WHERE custno_pk = $1', [id]);
+        if (customerCheck.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Customer not found'
@@ -212,27 +239,24 @@ exports.updateCustomer = async (req, res) => {
         // Build update query dynamically
         let updateFields = [];
         let values = [];
+        let paramCount = 1;
 
         const allowedFields = [
-            'custcode', 'projectno_fk', 'custmobilenumber', 'custemailid',
-            'custname', 'custaddress', 'custremarks', 'au_orgno'
+            'custcode', 'projectno_fk', 'countrycode', 'custmobilenumber', 'custemail',
+            'custname', 'facebook_link', 'linkedin_link', 'other_link', 'call_link_type',
+            'text_note', 'contact_type', 'custarea', 'custfeedback', 'agentfeedback',
+            'never_callind', 'never_callind_message', 'custgender', 'custbirthdate',
+            'custtype', 'cust_labeling', 'au_orgno'
         ];
 
         for (const field of allowedFields) {
             if (updates[field] !== undefined) {
-                updateFields.push(`${field} = ?`);
+                updateFields.push(`${field} = $${paramCount++}`);
                 values.push(updates[field]);
             }
         }
 
-        if (updateFields.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No valid fields to update'
-            });
-        }
-
-        updateFields.push(`au_updateempnoby = ?`);
+        updateFields.push(`au_updateempnoby = $${paramCount++}`);
         values.push(userId);
 
         updateFields.push(`au_updateat = CURRENT_TIMESTAMP`);
@@ -240,21 +264,16 @@ exports.updateCustomer = async (req, res) => {
 
         const query = `
             UPDATE customer SET ${updateFields.join(', ')}
-            WHERE custno_pk = ?
+            WHERE custno_pk = $${paramCount}
+            RETURNING *
         `;
 
-        await pool.execute(query, values);
-
-        // Fetch updated customer
-        const [updatedCustomer] = await pool.execute(
-            'SELECT * FROM customer WHERE custno_pk = ?',
-            [id]
-        );
+        const result = await pool.query(query, values);
 
         res.json({
             success: true,
             message: 'Customer updated successfully',
-            data: updatedCustomer[0]
+            data: result.rows[0]
         });
     } catch (error) {
         console.error('Update customer error:', error);
@@ -273,12 +292,12 @@ exports.deleteCustomer = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const [result] = await pool.execute(
-            'DELETE FROM customer WHERE custno_pk = ?',
+        const result = await pool.query(
+            'DELETE FROM customer WHERE custno_pk = $1 RETURNING custno_pk',
             [id]
         );
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Customer not found'

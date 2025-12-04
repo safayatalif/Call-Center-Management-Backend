@@ -10,14 +10,14 @@ exports.getDashboardStats = async (req, res) => {
 
         // Get total counts
         const [employeesCount, projectsCount, callsCount, pendingCallsCount] = await Promise.all([
-            pool.execute('SELECT COUNT(*) as count FROM employees WHERE empstatus = ?', ['Active']),
-            pool.execute('SELECT COUNT(*) as count FROM projects WHERE projectstatus = ?', ['OPEN']),
-            pool.execute('SELECT COUNT(*) as count FROM call_history'),
-            pool.execute('SELECT COUNT(*) as count FROM custassignment WHERE callstatus = ?', ['Pending'])
+            pool.query('SELECT COUNT(*) FROM employees WHERE empstatus = $1', ['Active']),
+            pool.query('SELECT COUNT(*) FROM projects WHERE projectstatus = $1', ['OPEN']),
+            pool.query('SELECT COUNT(*) FROM call_history'),
+            pool.query('SELECT COUNT(*) FROM custassignment WHERE callstatus = $1', ['Pending'])
         ]);
 
         // Get recent calls from call_history
-        const [recentCalls] = await pool.execute(`
+        const recentCalls = await pool.query(`
             SELECT ch.*, 
                    c.custname as customer_name, 
                    c.custmobilenumber as customer_phone,
@@ -32,14 +32,14 @@ exports.getDashboardStats = async (req, res) => {
         `);
 
         // Get call status distribution from custassignment (current status)
-        const [callStatusStats] = await pool.execute(`
+        const callStatusStats = await pool.query(`
             SELECT callstatus as status, COUNT(*) as count
             FROM custassignment
             GROUP BY callstatus
         `);
 
         // Get employees by role
-        const [employeesByRole] = await pool.execute(`
+        const employeesByRole = await pool.query(`
             SELECT role, COUNT(*) as count
             FROM employees
             WHERE empstatus = 'Active'
@@ -50,23 +50,23 @@ exports.getDashboardStats = async (req, res) => {
             success: true,
             data: {
                 stats: {
-                    totalEmployees: parseInt(employeesCount[0]?.count || 0),
-                    totalAgents: parseInt(employeesCount[0]?.count || 0),
-                    totalProjects: parseInt(projectsCount[0]?.count || 0),
-                    totalCalls: parseInt(callsCount[0]?.count || 0),
-                    pendingCalls: parseInt(pendingCallsCount[0]?.count || 0)
+                    totalEmployees: parseInt(employeesCount.rows[0].count),
+                    totalAgents: parseInt(employeesCount.rows[0].count),
+                    totalProjects: parseInt(projectsCount.rows[0].count),
+                    totalCalls: parseInt(callsCount.rows[0].count),
+                    pendingCalls: parseInt(pendingCallsCount.rows[0].count)
                 },
-                recentCalls: recentCalls.map(row => ({
+                recentCalls: recentCalls.rows.map(row => ({
                     id: row.history_pk,
-                    customer_name: row.customer_name || 'Unknown',
-                    customer_phone: row.customer_phone || 'N/A',
-                    status: row.callstatus || 'pending',
-                    agent_name: row.agent_name || 'Unassigned',
-                    project_name: row.project_name || 'N/A',
-                    created_at: row.interaction_datetime || new Date().toISOString()
+                    customer_name: row.customer_name,
+                    customer_phone: row.customer_phone,
+                    status: row.callstatus,
+                    agent_name: row.agent_name,
+                    project_name: row.project_name,
+                    created_at: row.interaction_datetime
                 })),
-                callStatusDistribution: callStatusStats,
-                employeesByRole: employeesByRole
+                callStatusDistribution: callStatusStats.rows,
+                employeesByRole: employeesByRole.rows
             }
         });
 
@@ -85,7 +85,7 @@ exports.getDashboardStats = async (req, res) => {
  */
 exports.getAgents = async (req, res) => {
     try {
-        const [employees] = await pool.execute(`
+        const employees = await pool.query(`
       SELECT e.*, p.projectname as project_name
       FROM employees e
       LEFT JOIN projects p ON e.assigned_project_id = p.projectno_pk
@@ -95,7 +95,7 @@ exports.getAgents = async (req, res) => {
 
         res.json({
             success: true,
-            data: employees
+            data: employees.rows
         });
 
     } catch (error) {
@@ -113,7 +113,7 @@ exports.getAgents = async (req, res) => {
  */
 exports.getProjects = async (req, res) => {
     try {
-        const [projects] = await pool.execute(`
+        const projects = await pool.query(`
       SELECT p.*, 
         COUNT(DISTINCT e.empno_pk) as employee_count,
         COUNT(DISTINCT c.id) as call_count
@@ -126,7 +126,7 @@ exports.getProjects = async (req, res) => {
 
         res.json({
             success: true,
-            data: projects
+            data: projects.rows
         });
 
     } catch (error) {
@@ -154,31 +154,35 @@ exports.getCalls = async (req, res) => {
       WHERE 1=1
     `;
         const params = [];
+        let paramCount = 1;
 
         if (status) {
-            query += ` AND c.status = ?`;
+            query += ` AND c.status = $${paramCount}`;
             params.push(status);
+            paramCount++;
         }
 
         // Support both employee_id and agent_id for backward compatibility
         const empId = employee_id || agent_id;
         if (empId) {
-            query += ` AND c.employee_id = ?`;
+            query += ` AND c.employee_id = $${paramCount}`;
             params.push(empId);
+            paramCount++;
         }
 
         if (project_id) {
-            query += ` AND c.project_id = ?`;
+            query += ` AND c.project_id = $${paramCount}`;
             params.push(project_id);
+            paramCount++;
         }
 
         query += ' ORDER BY c.created_at DESC';
 
-        const [calls] = await pool.execute(query, params);
+        const calls = await pool.query(query, params);
 
         res.json({
             success: true,
-            data: calls
+            data: calls.rows
         });
 
     } catch (error) {

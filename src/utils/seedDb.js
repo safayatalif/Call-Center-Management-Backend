@@ -2,24 +2,30 @@ const pool = require('../config/database');
 const bcrypt = require('bcryptjs');
 
 /**
- * Seed database with demo data
+ * Seed database with demo data (MySQL version)
  */
 async function seedDatabase() {
-    const client = await pool.connect();
+    const connection = await pool.getConnection();
 
     try {
         console.log('🌱 Starting database seeding...');
 
-        await client.query('BEGIN');
+        await connection.query('START TRANSACTION');
 
-        // Create admin user
-        const adminPassword = await bcrypt.hash('admin123', 10);
-        await client.query(`
-      INSERT INTO users (name, email, password_hash, role)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (email) DO NOTHING
-    `, ['Admin User', 'admin@callcenter.com', adminPassword, 'ADMIN']);
-        console.log('✅ Admin user created');
+        // Note: This seeder is for legacy 'users' table if it exists
+        // The main system uses 'employees' table
+
+        // Create admin user (if users table exists)
+        try {
+            const adminPassword = await bcrypt.hash('admin123', 10);
+            await connection.execute(`
+                INSERT IGNORE INTO users (name, email, password_hash, role)
+                VALUES (?, ?, ?, ?)
+            `, ['Admin User', 'admin@callcenter.com', adminPassword, 'ADMIN']);
+            console.log('✅ Admin user created (if users table exists)');
+        } catch (err) {
+            console.log('ℹ️  Users table may not exist, skipping...');
+        }
 
         // Create sample projects
         const projects = [
@@ -29,19 +35,25 @@ async function seedDatabase() {
         ];
 
         for (const project of projects) {
-            await client.query(`
-        INSERT INTO projects (name, description, status)
-        VALUES ($1, $2, 'active')
-        ON CONFLICT DO NOTHING
-      `, [project.name, project.description]);
+            await connection.execute(`
+                INSERT INTO projects (projectname, projectdescription, projectstatus)
+                VALUES (?, ?, 'OPEN')
+                ON DUPLICATE KEY UPDATE projectname = projectname
+            `, [project.name, project.description]);
         }
         console.log('✅ Sample projects created');
 
         // Get project IDs
-        const projectsResult = await client.query('SELECT id FROM projects LIMIT 3');
-        const projectIds = projectsResult.rows.map(row => row.id);
+        const [projectsResult] = await connection.execute('SELECT projectno_pk FROM projects LIMIT 3');
+        const projectIds = projectsResult.map(row => row.projectno_pk);
 
-        // Create sample agents
+        if (projectIds.length === 0) {
+            console.log('⚠️  No projects found, skipping agents and calls creation');
+            await connection.query('COMMIT');
+            return;
+        }
+
+        // Create sample agents (employees)
         const agents = [
             { name: 'জন ডো', email: 'john@callcenter.com', phone: '+880 1712-111111' },
             { name: 'জেন স্মিথ', email: 'jane@callcenter.com', phone: '+880 1712-222222' },
@@ -52,17 +64,23 @@ async function seedDatabase() {
         for (let i = 0; i < agents.length; i++) {
             const agent = agents[i];
             const projectId = projectIds[i % projectIds.length];
-            await client.query(`
-        INSERT INTO agents (name, email, phone, assigned_project_id, status)
-        VALUES ($1, $2, $3, $4, 'active')
-        ON CONFLICT (email) DO NOTHING
-      `, [agent.name, agent.email, agent.phone, projectId]);
+            await connection.execute(`
+                INSERT INTO employees (name, emailidoffical, officialmobilenum, assigned_project_id, empstatus, role)
+                VALUES (?, ?, ?, ?, 'Active', 'AGENT')
+                ON DUPLICATE KEY UPDATE name = name
+            `, [agent.name, agent.email, agent.phone, projectId]);
         }
         console.log('✅ Sample agents created');
 
         // Get agent IDs
-        const agentsResult = await client.query('SELECT id FROM agents LIMIT 4');
-        const agentIds = agentsResult.rows.map(row => row.id);
+        const [agentsResult] = await connection.execute('SELECT empno_pk FROM employees WHERE role = "AGENT" LIMIT 4');
+        const agentIds = agentsResult.map(row => row.empno_pk);
+
+        if (agentIds.length === 0) {
+            console.log('⚠️  No agents found, skipping calls creation');
+            await connection.query('COMMIT');
+            return;
+        }
 
         // Create sample calls
         const customers = [
@@ -90,22 +108,22 @@ async function seedDatabase() {
             const note = notes[i % notes.length];
             const duration = status === 'completed' ? Math.floor(Math.random() * 600) + 60 : null;
 
-            await client.query(`
-        INSERT INTO calls (agent_id, project_id, customer_name, customer_phone, customer_email, status, notes, call_duration)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [agentId, projectId, customer.name, customer.phone, customer.email, status, note, duration]);
+            await connection.execute(`
+                INSERT INTO calls (employee_id, project_id, customer_name, customer_phone, customer_email, status, notes, call_duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [agentId, projectId, customer.name, customer.phone, customer.email, status, note, duration]);
         }
         console.log('✅ Sample calls created');
 
-        await client.query('COMMIT');
+        await connection.query('COMMIT');
         console.log('✅ Database seeding completed successfully!');
 
     } catch (error) {
-        await client.query('ROLLBACK');
+        await connection.query('ROLLBACK');
         console.error('❌ Database seeding failed:', error);
         throw error;
     } finally {
-        client.release();
+        connection.release();
     }
 }
 

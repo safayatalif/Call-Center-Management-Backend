@@ -21,19 +21,19 @@ exports.login = async (req, res) => {
         const { email, password } = req.body; // email can be email or username
 
         // Check if employee exists (by email or username)
-        const empQuery = await pool.query(
-            'SELECT * FROM employees WHERE emailidoffical = $1 OR username = $1',
-            [email]
+        const [empRows] = await pool.execute(
+            'SELECT * FROM employees WHERE emailidoffical = ? OR username = ?',
+            [email, email]
         );
 
-        if (empQuery.rows.length === 0) {
+        if (empRows.length === 0) {
             return res.status(401).json({
                 success: false,
                 message: 'Invalid credentials'
             });
         }
 
-        const employee = empQuery.rows[0];
+        const employee = empRows[0];
 
         // Verify password
         const isPasswordValid = await bcrypt.compare(password, employee.entrypass);
@@ -94,12 +94,12 @@ exports.register = async (req, res) => {
         const { name, email, password, role, username } = req.body;
 
         // Check if employee already exists
-        const existingEmp = await pool.query(
-            'SELECT * FROM employees WHERE emailidoffical = $1 OR username = $2',
+        const [existingEmp] = await pool.execute(
+            'SELECT * FROM employees WHERE emailidoffical = ? OR username = ?',
             [email, username || email]
         );
 
-        if (existingEmp.rows.length > 0) {
+        if (existingEmp.length > 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Employee already exists with this email or username'
@@ -111,13 +111,12 @@ exports.register = async (req, res) => {
         const passwordHash = await bcrypt.hash(password, salt);
 
         // Create employee
-        const newEmp = await pool.query(
+        const [result] = await pool.execute(
             `INSERT INTO employees (
                 name, emailidoffical, entrypass, role, username, 
                 joindate, empstatus, restricteddataprivilege
             ) 
-            VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, 'Active', 'N') 
-            RETURNING *`,
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'Active', 'N')`,
             [
                 name,
                 email,
@@ -127,7 +126,13 @@ exports.register = async (req, res) => {
             ]
         );
 
-        const employee = newEmp.rows[0];
+        // Fetch the newly created employee
+        const [newEmpRows] = await pool.execute(
+            'SELECT * FROM employees WHERE empno_pk = ?',
+            [result.insertId]
+        );
+
+        const employee = newEmpRows[0];
 
         // Generate JWT token
         const token = jwt.sign(
@@ -166,19 +171,19 @@ exports.getProfile = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const empQuery = await pool.query(
-            'SELECT * FROM employees WHERE empno_pk = $1',
+        const [empRows] = await pool.execute(
+            'SELECT * FROM employees WHERE empno_pk = ?',
             [userId]
         );
 
-        if (empQuery.rows.length === 0) {
+        if (empRows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
             });
         }
 
-        const { entrypass, ...empData } = empQuery.rows[0];
+        const { entrypass, ...empData } = empRows[0];
 
         res.json({
             success: true,
@@ -203,19 +208,19 @@ exports.updatePassword = async (req, res) => {
         const { currentPassword, newPassword } = req.body;
 
         // Get user
-        const empQuery = await pool.query(
-            'SELECT * FROM employees WHERE empno_pk = $1',
+        const [empRows] = await pool.execute(
+            'SELECT * FROM employees WHERE empno_pk = ?',
             [userId]
         );
 
-        if (empQuery.rows.length === 0) {
+        if (empRows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
             });
         }
 
-        const employee = empQuery.rows[0];
+        const employee = empRows[0];
 
         // Verify current password
         const isPasswordValid = await bcrypt.compare(currentPassword, employee.entrypass);
@@ -232,8 +237,8 @@ exports.updatePassword = async (req, res) => {
         const passwordHash = await bcrypt.hash(newPassword, salt);
 
         // Update password
-        await pool.query(
-            'UPDATE employees SET entrypass = $1 WHERE empno_pk = $2',
+        await pool.execute(
+            'UPDATE employees SET entrypass = ? WHERE empno_pk = ?',
             [passwordHash, userId]
         );
 
