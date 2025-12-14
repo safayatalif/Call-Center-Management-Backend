@@ -1,29 +1,26 @@
-const pool = require('../config/database');
+const pool = require("../config/database");
 
 /**
  * Get agent performance report
  */
 exports.getAgentPerformance = async (req, res) => {
-    try {
-        const { startDate, endDate } = req.query;
+  try {
+    const { startDate, endDate } = req.query;
 
-        let dateFilter = '';
-        const params = [];
-        let paramCount = 1;
+    let dateFilter = "";
+    const params = [];
 
-        if (startDate) {
-            dateFilter += ` AND ch.interaction_datetime >= $${paramCount}`;
-            params.push(startDate);
-            paramCount++;
-        }
+    if (startDate) {
+      dateFilter += ` AND ch.interaction_datetime >= ?`;
+      params.push(startDate);
+    }
 
-        if (endDate) {
-            dateFilter += ` AND ch.interaction_datetime <= $${paramCount}`;
-            params.push(endDate);
-            paramCount++;
-        }
+    if (endDate) {
+      dateFilter += ` AND ch.interaction_datetime <= ?`;
+      params.push(endDate);
+    }
 
-        const query = `
+    const query = `
             SELECT 
                 e.empno_pk,
                 e.name as agent_name,
@@ -41,46 +38,43 @@ exports.getAgentPerformance = async (req, res) => {
             ORDER BY total_interactions DESC
         `;
 
-        const [result] = await pool.execute(query, params);
+    const [result] = await pool.execute(query, params);
 
-        res.json({
-            success: true,
-            data: result
-        });
-    } catch (error) {
-        console.error('Get agent performance error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error fetching agent performance',
-            error: error.message
-        });
-    }
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get agent performance error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error fetching agent performance",
+      error: error.message,
+    });
+  }
 };
 
 /**
  * Get project performance report
  */
 exports.getProjectPerformance = async (req, res) => {
-    try {
-        const { startDate, endDate } = req.query;
+  try {
+    const { startDate, endDate } = req.query;
 
-        let dateFilter = '';
-        const params = [];
-        let paramCount = 1;
+    let dateFilter = "";
+    const params = [];
 
-        if (startDate) {
-            dateFilter += ` AND ch.interaction_datetime >= $${paramCount}`;
-            params.push(startDate);
-            paramCount++;
-        }
+    if (startDate) {
+      dateFilter += ` AND ch.interaction_datetime >= ?`;
+      params.push(startDate);
+    }
 
-        if (endDate) {
-            dateFilter += ` AND ch.interaction_datetime <= $${paramCount}`;
-            params.push(endDate);
-            paramCount++;
-        }
+    if (endDate) {
+      dateFilter += ` AND ch.interaction_datetime <= ?`;
+      params.push(endDate);
+    }
 
-        const query = `
+    const query = `
             SELECT 
                 p.projectno_pk,
                 p.projectname,
@@ -94,46 +88,43 @@ exports.getProjectPerformance = async (req, res) => {
             ORDER BY total_interactions DESC
         `;
 
-        const [result] = await pool.execute(query, params);
+    const [result] = await pool.execute(query, params);
 
-        res.json({
-            success: true,
-            data: result
-        });
-    } catch (error) {
-        console.error('Get project performance error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error fetching project performance',
-            error: error.message
-        });
-    }
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get project performance error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error fetching project performance",
+      error: error.message,
+    });
+  }
 };
 
 /**
  * Get daily activity report
  */
 exports.getDailyActivity = async (req, res) => {
-    try {
-        const { startDate, endDate } = req.query; // Default to last 30 days if not provided?
+  try {
+    const { startDate, endDate } = req.query; // Default to last 30 days if not provided?
 
-        let dateFilter = '';
-        const params = [];
-        let paramCount = 1;
+    let dateFilter = "";
+    const params = [];
 
-        if (startDate) {
-            dateFilter += ` AND ch.interaction_datetime >= $${paramCount}`;
-            params.push(startDate);
-            paramCount++;
-        }
+    if (startDate) {
+      dateFilter += ` AND ch.interaction_datetime >= ?`;
+      params.push(startDate);
+    }
 
-        if (endDate) {
-            dateFilter += ` AND ch.interaction_datetime <= $${paramCount}`;
-            params.push(endDate);
-            paramCount++;
-        }
+    if (endDate) {
+      dateFilter += ` AND ch.interaction_datetime <= ?`;
+      params.push(endDate);
+    }
 
-        const query = `
+    const query = `
             SELECT 
                 DATE(ch.interaction_datetime) as date,
                 COUNT(ch.history_pk) as total_interactions,
@@ -145,18 +136,18 @@ exports.getDailyActivity = async (req, res) => {
             LIMIT 30
         `;
 
-        const [result] = await pool.execute(query, params);
+    const [result] = await pool.execute(query, params);
 
-        res.json({
-            success: true,
-            data: result
-        });
-    } catch (error) {
-        console.error('Get daily activity error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error fetching daily activity',
-            error: error.message
-        });
-    }
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Get daily activity error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error fetching daily activity",
+      error: error.message,
+    });
+  }
 };
